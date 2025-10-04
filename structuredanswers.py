@@ -10,7 +10,7 @@ Original file is located at
 # ======================
 # 1. Install dependencies
 # ======================
-!pip install -q transformers accelerate scikit-learn openpyxl tqdm
+
 
 # ======================
 # 2. Imports
@@ -23,16 +23,10 @@ from sklearn.metrics import r2_score
 from tqdm import tqdm
 
 # ======================
-# 3. Mount Google Drive
-# ======================
-from google.colab import drive
-drive.mount('/content/drive')
-
-# ======================
 # 4. Load Data
 # ======================
-transcripts_path = "/content/drive/My Drive/MIT_INTERVIEW_DATASET/Transcripts_All.xlsx"
-scores_path = "/content/drive/My Drive/MIT_INTERVIEW_DATASET/All_Scores.xlsx"
+transcripts_path = "/home/labuser/research/VLM-Project/data/Transcripts_All.xlsx"
+scores_path = "/home/labuser/research/VLM-Project/data/Transcripts_All.xlsx"
 
 transcripts_df = pd.read_excel(transcripts_path)
 scores_df = pd.read_excel(scores_path)
@@ -135,6 +129,9 @@ pred_df = pd.DataFrame(results)
 # ======================
 # 9. Merge with actual scores
 # ======================
+# Assuming the scores are in the 'Transcripts' column of scores_df
+scores_df = scores_df.rename(columns={'Transcripts': 'StructuredAnswers'})
+
 final_df = pred_df.merge(
     scores_df[["Participant", "StructuredAnswers"]],
     on="Participant",
@@ -144,21 +141,27 @@ final_df = pred_df.merge(
 # ======================
 # 10. Show Predicted vs Actual for first 20 participants
 # ======================
+print("\nFirst 20 results:")
 print(final_df[["Participant", "Predicted_StructuredAnswers", "StructuredAnswers"]].head(20))
 
 # ======================
-# 11. Calculate R² score
+# 11. Show summary statistics
 # ======================
-r2 = r2_score(final_df["StructuredAnswers"], final_df["Predicted_StructuredAnswers"])
-print("\nR² Score:", r2)
+print("\nSummary of Predicted Scores:")
+print(final_df["Predicted_StructuredAnswers"].describe())
+
+# Save results to CSV
+output_file = "predictions_results.csv"
+final_df.to_csv(output_file, index=False)
+print(f"\nResults saved to {output_file}")
 
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
 
 # Load your transcripts and scores
-transcripts_df = pd.read_excel("/content/drive/My Drive/MIT_INTERVIEW_DATASET/Transcripts_All.xlsx")
-scores_df = pd.read_excel("/content/drive/My Drive/MIT_INTERVIEW_DATASET/All_Scores.xlsx")
+transcripts_df = pd.read_excel("/home/labuser/research/VLM-Project/data/Transcripts_All.xlsx")
+scores_df = pd.read_excel("/home/labuser/research/VLM-Project/data/All_Scores.xlsx")
 
 # Suppose you already got LLM predictions as a list of dicts
 # Include participant IDs and predictions
@@ -193,34 +196,3 @@ print(f"R² Score: {r2:.4f}, MSE: {mse:.4f}")
 # Show first 20 candidates
 print(results_df.head(20)[["Participant", "Predicted_StructuredAnswers",
                             "Adjusted_Prediction", "StructuredAnswers"]])
-
-import pandas as pd
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score, mean_squared_error
-
-# Suppose this is your results DataFrame
-# Replace this with your actual DataFrame
-results_df = pd.DataFrame({
-    "Participant": ["p1", "p3", "p4", "p5", "p6"],
-    "Predicted_StructuredAnswers": [4.625, 3.583, 3.7, 6.0, 5.636],
-    "StructuredAnswers": [4.89158, 3.912199, 4.688379, 5.582514, 4.826245]
-})
-
-# Step 1: Prepare X and y
-X = results_df[["Predicted_StructuredAnswers"]].values  # LLM predictions
-y = results_df["StructuredAnswers"].values              # True scores
-
-# Step 2: Fit Linear Regression
-reg = LinearRegression()
-reg.fit(X, y)
-
-# Step 3: Adjust predictions
-results_df["Adjusted_Prediction"] = reg.predict(X)
-
-# Step 4: Evaluate
-r2 = r2_score(y, results_df["Adjusted_Prediction"])
-mse = mean_squared_error(y, results_df["Adjusted_Prediction"])
-
-print(f"Linear Regression Mapping:\nCoefficient: {reg.coef_[0]:.4f}, Intercept: {reg.intercept_:.4f}")
-print(f"R² Score: {r2:.4f}, MSE: {mse:.4f}")
-print(results_df)
