@@ -8,12 +8,7 @@ Original file is located at
 """
 
 # ======================
-# 1. Install dependencies
-# ======================
-
-
-# ======================
-# 2. Imports
+# Imports
 # ======================
 import pandas as pd
 import torch
@@ -23,7 +18,7 @@ from sklearn.metrics import r2_score
 from tqdm import tqdm
 
 # ======================
-# 4. Load Data
+# Load Data
 # ======================
 transcripts_path = "/home/labuser/research/VLM-Project/data/Transcripts_All.xlsx"
 scores_path = "/home/labuser/research/VLM-Project/data/Transcripts_All.xlsx"
@@ -48,7 +43,7 @@ generator = pipeline(
 )
 
 # ======================
-# 6. Helper function: chunk transcript
+# Helper function: chunk transcript
 # ======================
 def chunk_transcript(transcript, max_words=80):
     """
@@ -77,17 +72,57 @@ def chunk_transcript(transcript, max_words=80):
     return chunks
 
 # ======================
-# 7. Helper function: predict score for a chunk
+# Helper function: predict score for a chunk
 # ======================
 def predict_chunk_score(chunk):
     prompt = f"""
 You are an expert communication evaluator.
-Analyze the following interview transcript and score it from 0 to 9 for StructuredAnswers.
-Return ONLY a number (can be decimal).
+
+TASK
+Evaluate the STRUCTURE of answers in the following interview transcript between an interviewer and an interviewee.
+The transcript contains multiple question–answer pairs labeled as:
+Interviewer: ...
+Interviewee: ...
+
+DEFINITION — "StructuredAnswers"
+How clearly and logically the answer is organized and presented:
+- Clear opening or framing statement.
+- Logical flow of ideas (point → reason → example → conclusion).
+- Smooth transitions or signposting (e.g., “first”, “because”, “for example”).
+- Grouping of related ideas and avoidance of tangents.
+- Concluding or wrap-up sentence that connects back to the question.
+
+SCORING SCALE (0–9)
+9   = Excellent: well-organized, clear logic, smooth transitions, strong close.
+7–8 = Good: mostly clear and logical; minor structural issues.
+5–6 = Fair: understandable but loosely structured; weak start or ending.
+3–4 = Weak: scattered or unclear sequence; little structure.
+1–2 = Poor: rambling or disorganized; hard to follow.
+0   = Not scorable or off-topic.
+
+INSTRUCTIONS
+1. Identify each interviewer question and the interviewee’s direct answer(s).
+2. Assign a STRUCTURED ANSWERS score (0–9, decimals allowed) for each answer.
+3. At the end, compute the **average** of all these scores.
+4. Output the result in the following exact format:
+
+Question 1: <short summary of question>
+Score: <number>
+
+Question 2: <short summary of question>
+Score: <number>
+
+...
+
+Average StructuredAnswers Score: <average_number>
+
+Return ONLY this structured list and average. No explanations or commentary.
 
 Transcript:
 {chunk}
 """
+    return prompt
+
     try:
         output = generator(prompt, max_new_tokens=50, do_sample=False)[0]["generated_text"]
         # Extract first valid number <=9
@@ -101,7 +136,7 @@ Transcript:
         return None
 
 # ======================
-# 8. Run Inference for all participants
+# Run Inference for all participants
 # ======================
 results = []
 
@@ -127,7 +162,7 @@ for i, row in tqdm(transcripts_df.iterrows(), total=len(transcripts_df)):
 pred_df = pd.DataFrame(results)
 
 # ======================
-# 9. Merge with actual scores
+# Merge with actual scores
 # ======================
 # Assuming the scores are in the 'Transcripts' column of scores_df
 scores_df = scores_df.rename(columns={'Transcripts': 'StructuredAnswers'})
@@ -139,13 +174,13 @@ final_df = pred_df.merge(
 )
 
 # ======================
-# 10. Show Predicted vs Actual for first 20 participants
+# Show Predicted vs Actual for first 20 participants
 # ======================
 print("\nFirst 20 results:")
 print(final_df[["Participant", "Predicted_StructuredAnswers", "StructuredAnswers"]].head(20))
 
 # ======================
-# 11. Show summary statistics
+# Show summary statistics
 # ======================
 print("\nSummary of Predicted Scores:")
 print(final_df["Predicted_StructuredAnswers"].describe())
