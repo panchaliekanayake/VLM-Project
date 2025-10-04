@@ -196,3 +196,7 @@ print(f"R² Score: {r2:.4f}, MSE: {mse:.4f}")
 # Show first 20 candidates
 print(results_df.head(20)[["Participant", "Predicted_StructuredAnswers",
                             "Adjusted_Prediction", "StructuredAnswers"]])
+
+
+# Save final results
+results_df.to_csv("final_results.csv", index=False)
