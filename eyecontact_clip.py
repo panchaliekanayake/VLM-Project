@@ -13,7 +13,7 @@ from transformers import CLIPProcessor, CLIPModel
 # -----------------------
 # Config
 # -----------------------
-VIDEO_PATH = "/home/labuser/Datasets/Videos/P3.avi"  # <- change if needed
+VIDEO_PATH = "/home/labuser/Datasets/Videos/P3.avi" 
 TARGET_SPACING_SEC = 2.5   # denser sampling (~96 frames for ~4 min)
 SAVE_FRAMES = False        # set True to export sampled (cropped) frames as images
 OUTPUT_DIR = "/home/labuser/research/VLM-Project/results"
