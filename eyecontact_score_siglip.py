@@ -1,0 +1,191 @@
+#SIGLIP - - score eye contact in images 2-7
+
+import os
+import math
+import cv2
+import torch
+import pandas as pd
+import numpy as np
+from PIL import Image
+from tqdm import tqdm
+from transformers import AutoProcessor, AutoModel
+
+# -----------------------
+# Config
+# -----------------------
+VIDEO_PATH = "/home/labuser/Datasets/Videos/P1.avi"  # <- change if needed
+TARGET_SPACING_SEC = 2.5   # denser sampling (~96 frames for ~4 min)
+SAVE_FRAMES = False        # set True to export sampled (cropped) frames as images
+OUTPUT_DIR = "/home/labuser/research/VLM-Project/results"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Decision margin for label confidence
+MARGIN_THRESHOLD = 0.01
+
+# Scoring: map margin -> [2.0, 7.0]
+SCORE_MIN = 2.0
+SCORE_MAX = 7.0
+MARGIN_MIN = -0.05
+MARGIN_MAX =  0.05
+
+# Face crop settings
+FACE_CROP = True
+FACE_PADDING = 0.20
+
+# Zero-shot prompts (eye contact)
+TEXT_PROMPTS = [
+    "the interviewee making eye contact with the interviewer or looking toward the camera",
+    "the interviewee not making eye contact, looking away or looking down"
+]
+
+# -----------------------
+# Load SigLIP
+# -----------------------
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model_name = "google/siglip-so400m-patch14-384"
+model = AutoModel.from_pretrained(model_name).to(device)
+processor = AutoProcessor.from_pretrained(model_name)
+
+# -----------------------
+# Face detector
+# -----------------------
+if FACE_CROP:
+    haar_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    face_cascade = cv2.CascadeClassifier(haar_path)
+
+def detect_and_crop_face(bgr_img):
+    if not FACE_CROP:
+        return cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB), False
+    gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+    if len(faces) == 0:
+        return cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB), False
+    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+    H, W = bgr_img.shape[:2]
+    pad_x = int(w * FACE_PADDING); pad_y = int(h * FACE_PADDING)
+    x1 = max(0, x - pad_x); y1 = max(0, y - pad_y)
+    x2 = min(W, x + w + pad_x); y2 = min(H, y + h + pad_y)
+    crop = bgr_img[y1:y2, x1:x2]
+    return cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), True
+
+# -----------------------
+# Helpers
+# -----------------------
+def time_spaced_indices(total_frames: int, fps: float, spacing_sec: float):
+    if total_frames <= 0 or fps <= 0:
+        return []
+    step = max(int(round(spacing_sec * fps)), 1)
+    idxs = list(range(0, total_frames, step))
+    return idxs if idxs else [0]
+
+def margin_to_score(margin: float) -> float:
+    norm = (margin - MARGIN_MIN) / (MARGIN_MAX - MARGIN_MIN)
+    norm = max(0.0, min(1.0, norm))
+    return SCORE_MIN + (SCORE_MAX - SCORE_MIN) * norm
+
+def analyze_video(video_path: str, spacing_sec: float, save_frames: bool):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    if fps <= 0:
+        fps = 25.0
+
+    idxs = time_spaced_indices(total_frames, fps, spacing_sec)
+
+    # Pre-encode prompts once
+    with torch.no_grad():
+        text_inputs = processor(text=TEXT_PROMPTS, images=None, return_tensors="pt", padding=True).to(device)
+        text_embeds = model.get_text_features(**text_inputs)
+        text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
+
+    frame_save_dir = os.path.join(OUTPUT_DIR, "sampled_frames_siglip_eye")
+    if save_frames:
+        os.makedirs(frame_save_dir, exist_ok=True)
+
+    results = []
+    for fi in tqdm(idxs, desc="Evaluating frames (SigLIP, eye contact)"):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+        ok, frame_bgr = cap.read()
+        if not ok or frame_bgr is None:
+            continue
+
+        # Face-crop
+        rgb_img, face_found = detect_and_crop_face(frame_bgr)
+        pil_img = Image.fromarray(rgb_img)
+
+        if save_frames:
+            pil_img.save(os.path.join(frame_save_dir, f"frame_{fi:06d}.jpg"), quality=95)
+
+        with torch.no_grad():
+            image_inputs = processor(images=pil_img, return_tensors="pt").to(device)
+            image_embeds = model.get_image_features(**image_inputs)
+            image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
+
+            sim = image_embeds @ text_embeds.T  # [1, 2]
+            sim_eye = sim[0, 0].item()
+            sim_not = sim[0, 1].item()
+            margin = sim_eye - sim_not
+
+            if margin >= MARGIN_THRESHOLD:
+                label = "Yes"
+            elif margin <= -MARGIN_THRESHOLD:
+                label = "No"
+            else:
+                label = "Uncertain"
+
+            mark = margin_to_score(margin)
+
+        ts = fi / fps
+        results.append({
+            "frame_index": fi,
+            "timestamp_sec": ts,
+            "face_detected": bool(face_found),
+            "eye_contact_sim": sim_eye,
+            "not_eye_contact_sim": sim_not,
+            "eye_contact_margin": margin,
+            "eye_contact_label": label,
+            "eye_contact_mark": mark
+        })
+
+    cap.release()
+    return pd.DataFrame(results), fps, total_frames
+
+# -----------------------
+# Run
+# -----------------------
+if __name__ == "__main__":
+    df, fps, total_frames = analyze_video(VIDEO_PATH, TARGET_SPACING_SEC, SAVE_FRAMES)
+    if df.empty:
+        raise RuntimeError("No frames analyzed — check the video path or codec.")
+
+    df_sorted = df.sort_values("frame_index")
+
+    face_df = df_sorted[df_sorted["face_detected"] == True]
+    if len(face_df) > 0:
+        avg_mark = face_df["eye_contact_mark"].mean()
+        used_frames = len(face_df)
+        used_note = "average over FACE-DETECTED frames"
+    else:
+        avg_mark = df_sorted["eye_contact_mark"].mean()
+        used_frames = len(df_sorted)
+        used_note = "average over ALL frames (no face detected)"
+
+    yes_count = (df_sorted["eye_contact_label"] == "Yes").sum()
+    no_count = (df_sorted["eye_contact_label"] == "No").sum()
+    uncertain_count = (df_sorted["eye_contact_label"] == "Uncertain").sum()
+
+    base = os.path.splitext(os.path.basename(VIDEO_PATH))[0]
+    csv_path = os.path.join(OUTPUT_DIR, f"{base}_eye_contact_siglip_marks.csv")
+    df_sorted.to_csv(csv_path, index=False)
+
+    duration_sec = total_frames / fps if fps > 0 else float("nan")
+    print("\n--- Summary (SigLIP • Eye Contact • Marks 2–7) ---")
+    print(f"Video: {VIDEO_PATH}")
+    print(f"FPS: {fps:.3f} | Total frames: {total_frames} | Duration: {duration_sec/60:.2f} min")
+    print(f"Sampled frames: {len(df_sorted)} (every ~{TARGET_SPACING_SEC:.1f}s)")
+    print(f"Label counts -> Yes={yes_count}, No={no_count}, Uncertain={uncertain_count}")
+    print(f"Average eye-contact mark: {avg_mark:.2f}  ({used_note}; frames used: {used_frames})")
+    print(f"CSV saved: {csv_path}")
